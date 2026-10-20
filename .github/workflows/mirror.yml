@@ -1,0 +1,61 @@
+name: Mirror exact Runpod base image
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+  packages: write
+concurrency:
+  group: exact-runpod-image-mirror
+  cancel-in-progress: false
+jobs:
+  mirror:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      REGCTL_CONFIG: ${{ runner.temp }}/crates-regctl.json
+      EXPECTED_DIGEST: sha256:be0f41de295871f2a2e7a069679d07f3117dc44d8698b1f1f47c69c2a40fa642
+      SOURCE: docker.io/runpod/pytorch@sha256:be0f41de295871f2a2e7a069679d07f3117dc44d8698b1f1f47c69c2a40fa642
+    steps:
+      - name: Download checksum-pinned standalone copy tool
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          cd "$RUNNER_TEMP"
+          curl --fail --location --max-time 120 --output regctl https://github.com/regclient/regclient/releases/download/v0.11.6/regctl-linux-amd64
+          printf '%s\n' '8e0e62a497fcdb8048d18aa927a139613176ba0531f412bc541044e28f9856bd  regctl' | sha256sum --check
+          chmod 755 regctl
+          ./regctl version
+          ./regctl config set --docker-cred=false --docker-cert=false
+          chmod 600 "$REGCTL_CONFIG"
+      - name: Copy exact manifest and unchanged layer blobs; verify destination
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_ACTOR: ${{ github.actor }}
+          GH_OWNER: ${{ github.repository_owner }}
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP"
+          umask 077
+          trap 'rm -f "$REGCTL_CONFIG"' EXIT
+          destination="ghcr.io/${GH_OWNER,,}/the-crates-runpod-pytorch"
+          export DESTINATION="$destination"
+          printf '%s' "$GH_TOKEN" | ./regctl registry login ghcr.io -u "$GH_ACTOR" --pass-stdin
+          ./regctl manifest get "$SOURCE" --format raw-body > source-manifest.json
+          printf '%s  %s\n' "${EXPECTED_DIGEST#sha256:}" source-manifest.json | sha256sum --check
+          ./regctl image copy "$SOURCE" "$destination:1.4.0-cu1281-torch280-ubuntu2404"
+          ./regctl manifest get "$destination@$EXPECTED_DIGEST" --format raw-body > destination-manifest.json
+          cmp source-manifest.json destination-manifest.json
+          python3 - <<'PY'
+          import json, os, subprocess
+          manifest=json.load(open('source-manifest.json'))
+          for descriptor in [manifest['config'], *manifest['layers']]:
+              subprocess.run(['./regctl','blob','head',os.environ['DESTINATION'],descriptor['digest']],check=True,stdout=subprocess.DEVNULL)
+          print('Exact manifest bytes match; config and all 35 layers exist at the destination.')
+          print(os.environ['DESTINATION']+'@'+os.environ['EXPECTED_DIGEST'])
+          PY
+      - name: Remove transient registry authentication
+        if: always()
+        shell: bash
+        run: rm -f "$REGCTL_CONFIG"
