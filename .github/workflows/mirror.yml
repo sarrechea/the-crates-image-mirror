@@ -12,12 +12,13 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     env:
-      REGCTL_CONFIG: ${{ runner.temp }}/crates-regctl.json
       EXPECTED_DIGEST: sha256:be0f41de295871f2a2e7a069679d07f3117dc44d8698b1f1f47c69c2a40fa642
       SOURCE: docker.io/runpod/pytorch@sha256:be0f41de295871f2a2e7a069679d07f3117dc44d8698b1f1f47c69c2a40fa642
     steps:
       - name: Download checksum-pinned standalone copy tool
         shell: bash
+        env:
+          REGCTL_CONFIG: ${{ runner.temp }}/crates-regctl.json
         run: |
           set -euo pipefail
           umask 077
@@ -31,6 +32,7 @@ jobs:
       - name: Copy exact manifest and unchanged layer blobs; verify destination
         shell: bash
         env:
+          REGCTL_CONFIG: ${{ runner.temp }}/crates-regctl.json
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_ACTOR: ${{ github.actor }}
           GH_OWNER: ${{ github.repository_owner }}
@@ -58,4 +60,6 @@ jobs:
       - name: Remove transient registry authentication
         if: always()
         shell: bash
+        env:
+          REGCTL_CONFIG: ${{ runner.temp }}/crates-regctl.json
         run: rm -f "$REGCTL_CONFIG"
